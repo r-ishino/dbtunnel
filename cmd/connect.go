@@ -28,6 +28,17 @@ func init() {
 	rootCmd.AddCommand(connectCmd)
 }
 
+// dbConnection は接続に必要な情報をまとめた構造体
+type dbConnection struct {
+	envName   string
+	dbName    string
+	env       *config.Environment
+	db        *config.Database
+	password  string
+	session   *aws.PortForwardingSession
+	ssmTarget string
+}
+
 // RunConnect は環境に接続するコマンドの実行関数
 func RunConnect(_ *cobra.Command, args []string) error {
 	cfg := GetConfig()
@@ -57,24 +68,36 @@ func RunConnect(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("環境 %s にデータベースが設定されていません", envName)
 	}
 
-	// データベースを選択
-	selectedDB, err := selectDatabase(dbNames)
+	// データベースを選択（複数選択可能）
+	selectedDBs, err := selectDatabases(dbNames)
 	if err != nil {
 		return err
 	}
 
-	// 環境とデータベースの設定を取得
-	_, db, err := cfg.GetDatabase(envName, selectedDB)
-	if err != nil {
-		return err
+	// 接続情報を構築
+	var connections []*dbConnection
+	for _, dbName := range selectedDBs {
+		_, db, err := cfg.GetDatabase(envName, dbName)
+		if err != nil {
+			return err
+		}
+		ssmTarget := env.SSMTarget
+		if db.SSMTarget != "" {
+			ssmTarget = db.SSMTarget
+		}
+		connections = append(connections, &dbConnection{
+			envName:   envName,
+			dbName:    dbName,
+			env:       env,
+			db:        db,
+			ssmTarget: ssmTarget,
+		})
 	}
 
 	// 接続情報を表示
 	fmt.Println()
 	fmt.Printf("環境: %s\n", envName)
-	fmt.Printf("データベース: %s\n", selectedDB)
-	fmt.Printf("RDSホスト: %s\n", db.RDSHost)
-	fmt.Printf("ローカルポート: %d\n", db.LocalPort)
+	fmt.Printf("データベース: %v\n", selectedDBs)
 	fmt.Println()
 
 	// コンテキストとシグナルハンドリングの設定
@@ -85,50 +108,73 @@ func RunConnect(_ *cobra.Command, args []string) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// 1. AWS Secrets Managerからパスワードを取得
-	fmt.Print("パスワードを取得中...")
-	password, err := aws.GetPassword(ctx, env.AWSProfile, env.AWSRegion, db.SecretName, db.SecretKey)
-	if err != nil {
-		fmt.Println(" 失敗")
-		return fmt.Errorf("パスワードの取得に失敗: %w", err)
-	}
-	fmt.Println(" 完了")
-
-	// 2. SSMポートフォワーディングを開始
-	fmt.Print("SSMポートフォワーディングを開始中...")
-	// データベース固有のSSMターゲットがあればそちらを優先
-	ssmTarget := env.SSMTarget
-	if db.SSMTarget != "" {
-		ssmTarget = db.SSMTarget
-	}
-	session, err := aws.StartPortForwarding(
-		ctx,
-		env.AWSProfile,
-		env.AWSRegion,
-		ssmTarget,
-		db.RDSHost,
-		db.Port,
-		db.LocalPort,
-	)
-	if err != nil {
-		fmt.Println(" 失敗")
-		return fmt.Errorf("SSMポートフォワーディングの開始に失敗: %w", err)
-	}
-	fmt.Println(" 完了")
-
-	// クリーンアップ用のdefer
-	defer func() {
+	// クリーンアップ関数
+	cleanup := func() {
 		fmt.Print("\nSSMセッションを終了中...")
-		if err := session.Stop(); err != nil {
-			fmt.Printf(" エラー: %v\n", err)
-		} else {
-			fmt.Println(" 完了")
+		for _, conn := range connections {
+			if conn.session != nil {
+				_ = conn.session.Stop()
+			}
 		}
-	}()
+		fmt.Println(" 完了")
+	}
+	defer cleanup()
 
-	// 3. Sequel Aceを起動
+	// 各DBに対してパスワード取得とSSMポートフォワーディングを開始
+	for i, conn := range connections {
+		// パスワードを取得
+		fmt.Printf("[%d/%d] %s: パスワードを取得中...", i+1, len(connections), conn.dbName)
+		password, err := aws.GetPassword(ctx, conn.env.AWSProfile, conn.env.AWSRegion, conn.db.SecretName, conn.db.SecretKey)
+		if err != nil {
+			fmt.Println(" 失敗")
+			return fmt.Errorf("%s のパスワード取得に失敗: %w", conn.dbName, err)
+		}
+		conn.password = password
+		fmt.Println(" 完了")
+
+		// SSMポートフォワーディングを開始
+		fmt.Printf("[%d/%d] %s: SSMポートフォワーディングを開始中...", i+1, len(connections), conn.dbName)
+		session, err := aws.StartPortForwarding(
+			ctx,
+			conn.env.AWSProfile,
+			conn.env.AWSRegion,
+			conn.ssmTarget,
+			conn.db.RDSHost,
+			conn.db.Port,
+			conn.db.LocalPort,
+		)
+		if err != nil {
+			fmt.Println(" 失敗")
+			return fmt.Errorf("%s のSSMポートフォワーディング開始に失敗: %w", conn.dbName, err)
+		}
+		conn.session = session
+		fmt.Println(" 完了")
+	}
+
+	// Sequel Aceを起動
 	fmt.Print("Sequel Aceを起動中...")
-	sequelAce, err := sequelace.Open(db.User, password, "127.0.0.1", db.LocalPort, db.Database)
+	var sequelAce *sequelace.Process
+
+	if len(connections) == 1 {
+		// 単一接続の場合は従来通り
+		conn := connections[0]
+		sequelAce, err = sequelace.Open(conn.db.User, conn.password, "127.0.0.1", conn.db.LocalPort, conn.db.Database)
+	} else {
+		// 複数接続の場合はタブで開く
+		var connInfos []sequelace.ConnectionInfo
+		for _, conn := range connections {
+			connInfos = append(connInfos, sequelace.ConnectionInfo{
+				User:     conn.db.User,
+				Password: conn.password,
+				Host:     "127.0.0.1",
+				Port:     conn.db.LocalPort,
+				Database: conn.db.Database,
+				Label:    conn.dbName,
+			})
+		}
+		sequelAce, err = sequelace.OpenMultipleInTabs(connInfos)
+	}
+
 	if err != nil {
 		fmt.Println(" 失敗")
 		return fmt.Errorf("sequel Aceの起動に失敗: %w", err)
@@ -176,13 +222,13 @@ func selectEnvironment(cfg *config.Config, args []string) (string, error) {
 	return tui.Select("接続する環境を選択してください", envNames)
 }
 
-// selectDatabase はデータベースを選択する
-// 選択肢が1つの場合は自動選択、複数の場合はTUIで選択
-func selectDatabase(dbNames []string) (string, error) {
+// selectDatabases はデータベースを選択する（複数選択可能）
+// 選択肢が1つの場合は自動選択、複数の場合はTUIで複数選択
+func selectDatabases(dbNames []string) ([]string, error) {
 	if len(dbNames) == 1 {
 		fmt.Printf("データベース: %s\n", dbNames[0])
-		return dbNames[0], nil
+		return dbNames, nil
 	}
 
-	return tui.Select("接続するデータベースを選択してください", dbNames)
+	return tui.SelectMultiple("接続するデータベースを選択してください（スペースで選択）", dbNames)
 }

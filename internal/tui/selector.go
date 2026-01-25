@@ -138,3 +138,143 @@ func Select(title string, options []string) (string, error) {
 
 	return fm.choice, nil
 }
+
+// multiSelectModel は複数選択用のBubbleteaモデル
+type multiSelectModel struct {
+	title    string
+	options  []string
+	cursor   int
+	selected map[int]bool
+	quitting bool
+}
+
+func (m multiSelectModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.quitting = true
+			m.selected = nil
+			return m, tea.Quit
+
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+
+		case "down", "j":
+			if m.cursor < len(m.options)-1 {
+				m.cursor++
+			}
+
+		case " ", "x", "tab":
+			// スペース/x/tabで選択をトグル
+			if m.selected[m.cursor] {
+				delete(m.selected, m.cursor)
+			} else {
+				m.selected[m.cursor] = true
+			}
+
+		case "a":
+			// 全選択/全解除
+			if len(m.selected) == len(m.options) {
+				m.selected = make(map[int]bool)
+			} else {
+				for i := range m.options {
+					m.selected[i] = true
+				}
+			}
+
+		case "enter":
+			return m, tea.Quit
+		}
+	}
+
+	return m, nil
+}
+
+func (m multiSelectModel) View() string {
+	if m.quitting && m.selected == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	titleStyle := lipgloss.NewStyle().
+		MarginLeft(2).
+		Foreground(lipgloss.Color("170")).
+		Bold(true)
+	b.WriteString(titleStyle.Render(m.title))
+	b.WriteString("\n\n")
+
+	for i, option := range m.options {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = "> "
+		}
+
+		checked := "[ ]"
+		if m.selected[i] {
+			checked = "[x]"
+		}
+
+		style := lipgloss.NewStyle().PaddingLeft(2)
+		if m.cursor == i {
+			style = style.Foreground(lipgloss.Color("170"))
+		}
+
+		line := fmt.Sprintf("%s%s %s", cursor, checked, option)
+		b.WriteString(style.Render(line))
+		b.WriteString("\n")
+	}
+
+	helpStyle := lipgloss.NewStyle().
+		MarginTop(1).
+		MarginLeft(2).
+		Foreground(lipgloss.Color("241"))
+	b.WriteString(helpStyle.Render("x/スペース: 選択  a: 全選択  Enter: 確定  q: キャンセル"))
+
+	return docStyle.Render(b.String())
+}
+
+// SelectMultiple は複数選択肢を表示してユーザーの選択を返す
+func SelectMultiple(title string, options []string) ([]string, error) {
+	if len(options) == 0 {
+		return nil, errors.New("選択肢がありません")
+	}
+
+	m := multiSelectModel{
+		title:    title,
+		options:  options,
+		cursor:   0,
+		selected: make(map[int]bool),
+	}
+
+	p := tea.NewProgram(m)
+	finalModel, err := p.Run()
+	if err != nil {
+		return nil, fmt.Errorf("UIの実行に失敗しました: %w", err)
+	}
+
+	fm := finalModel.(multiSelectModel)
+	if fm.quitting && fm.selected == nil {
+		return nil, ErrCancelled
+	}
+
+	// 選択された項目を順序通りに返す
+	var result []string
+	for i, opt := range options {
+		if fm.selected[i] {
+			result = append(result, opt)
+		}
+	}
+
+	if len(result) == 0 {
+		return nil, errors.New("項目が選択されていません")
+	}
+
+	return result, nil
+}
