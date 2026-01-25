@@ -96,11 +96,16 @@ func RunConnect(_ *cobra.Command, args []string) error {
 
 	// 2. SSMポートフォワーディングを開始
 	fmt.Print("SSMポートフォワーディングを開始中...")
+	// データベース固有のSSMターゲットがあればそちらを優先
+	ssmTarget := env.SSMTarget
+	if db.SSMTarget != "" {
+		ssmTarget = db.SSMTarget
+	}
 	session, err := aws.StartPortForwarding(
 		ctx,
 		env.AWSProfile,
 		env.AWSRegion,
-		env.SSMTarget,
+		ssmTarget,
 		db.RDSHost,
 		db.Port,
 		db.LocalPort,
@@ -123,7 +128,7 @@ func RunConnect(_ *cobra.Command, args []string) error {
 
 	// 3. Sequel Aceを起動
 	fmt.Print("Sequel Aceを起動中...")
-	err = sequelace.Open(db.User, password, "127.0.0.1", db.LocalPort, db.Database)
+	sequelAce, err := sequelace.Open(db.User, password, "127.0.0.1", db.LocalPort, db.Database)
 	if err != nil {
 		fmt.Println(" 失敗")
 		return fmt.Errorf("sequel Aceの起動に失敗: %w", err)
@@ -132,11 +137,22 @@ func RunConnect(_ *cobra.Command, args []string) error {
 
 	fmt.Println()
 	fmt.Println("接続が確立されました。")
-	fmt.Println("終了するには Ctrl+C を押してください。")
+	fmt.Println("Sequel Aceを終了するか、Ctrl+C を押すとセッションが終了します。")
 
-	// シグナルを待機
-	<-sigChan
-	fmt.Println("\n終了シグナルを受信しました。")
+	// Sequel Ace終了を待機するgoroutine
+	sequelAceDone := make(chan struct{})
+	go func() {
+		_ = sequelAce.Wait()
+		close(sequelAceDone)
+	}()
+
+	// Sequel Ace終了 または Ctrl+C を待機
+	select {
+	case <-sequelAceDone:
+		fmt.Println("\nSequel Aceが終了しました。")
+	case <-sigChan:
+		fmt.Println("\n終了シグナルを受信しました。")
+	}
 
 	return nil
 }

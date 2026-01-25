@@ -11,6 +11,7 @@ import (
 
 // Database はアプリケーションごとのDB接続情報
 type Database struct {
+	SSMTarget  string `mapstructure:"ssm_target"`  // データベース固有の踏み台サーバー（省略時は環境のSSMTargetを使用）
 	RDSHost    string `mapstructure:"rds_host"`
 	Port       int    `mapstructure:"port"`
 	LocalPort  int    `mapstructure:"local_port"`

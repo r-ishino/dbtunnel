@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os/exec"
 	"time"
@@ -36,7 +37,11 @@ func StartPortForwarding(
 		"--region", region,
 	)
 
-	// コマンドを開始（出力は破棄）
+	// 出力を破棄（バッファリングによるブロックを防ぐ）
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+
+	// コマンドを開始
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("SSMセッションの開始に失敗: %w", err)
 	}

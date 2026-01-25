@@ -2,9 +2,10 @@ environments:
   production:
     aws_profile: prod
     aws_region: ap-northeast-1
-    ssm_target: i-0123456789abcdef0
+    ssm_target: i-0123456789abcdef0  # 環境のデフォルト踏み台（データベースで指定がなければこれを使用）
     databases:
       application_A:
+        # ssm_target: i-xxxxx  # データベース固有の踏み台サーバー（省略時は環境のssm_targetを使用）
         rds_host: prod-app-a.xxx.ap-northeast-1.rds.amazonaws.com
         port: 3306
         local_port: 13306
@@ -13,6 +14,7 @@ environments:
         secret_name: prod/app-a/db-password
         # secret_key: password  # JSON形式の場合のキー名（省略時は "password"）
       application_B:
+        ssm_target: i-abcdef1234567890  # このDBは別の踏み台を使用する例
         rds_host: prod-app-b.xxx.ap-northeast-1.rds.amazonaws.com
         port: 3306
         local_port: 13307
