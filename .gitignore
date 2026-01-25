@@ -1,0 +1,15 @@
+# AI assistant memo (personal)
+CLAUDE.md
+
+# Binary
+dbtunnel
+
+# Development
+tmp/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store

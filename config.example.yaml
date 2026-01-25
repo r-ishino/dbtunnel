@@ -1,0 +1,40 @@
+environments:
+  production:
+    aws_profile: prod
+    aws_region: ap-northeast-1
+    ssm_target: i-0123456789abcdef0
+    databases:
+      application_A:
+        rds_host: prod-app-a.xxx.ap-northeast-1.rds.amazonaws.com
+        port: 3306
+        local_port: 13306
+        database: app_a_production
+        user: admin
+        secret_name: prod/app-a/db-password
+      application_B:
+        rds_host: prod-app-b.xxx.ap-northeast-1.rds.amazonaws.com
+        port: 3306
+        local_port: 13307
+        database: app_b_production
+        user: admin
+        secret_name: prod/app-b/db-password
+
+  staging:
+    aws_profile: staging
+    aws_region: ap-northeast-1
+    ssm_target: i-abcdef0123456789
+    databases:
+      application_A:
+        rds_host: staging-app-a.xxx.ap-northeast-1.rds.amazonaws.com
+        port: 3306
+        local_port: 13316
+        database: app_a_staging
+        user: admin
+        secret_name: staging/app-a/db-password
+      application_B:
+        rds_host: staging-app-b.xxx.ap-northeast-1.rds.amazonaws.com
+        port: 3306
+        local_port: 13317
+        database: app_b_staging
+        user: admin
+        secret_name: staging/app-b/db-password
