@@ -1,9 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/ishinoryuuichi/dbtunnel/internal/aws"
 	"github.com/ishinoryuuichi/dbtunnel/internal/config"
+	"github.com/ishinoryuuichi/dbtunnel/internal/sequelace"
 	"github.com/ishinoryuuichi/dbtunnel/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -69,15 +75,68 @@ func RunConnect(_ *cobra.Command, args []string) error {
 	fmt.Printf("データベース: %s\n", selectedDB)
 	fmt.Printf("RDSホスト: %s\n", db.RDSHost)
 	fmt.Printf("ローカルポート: %d\n", db.LocalPort)
-	fmt.Printf("AWSプロファイル: %s\n", env.AWSProfile)
-	fmt.Printf("踏み台サーバー: %s\n", env.SSMTarget)
 	fmt.Println()
 
-	// TODO: AWS Secrets Managerからパスワードを取得
-	// TODO: SSMポートフォワーディングを開始
-	// TODO: Sequel Aceを起動
+	// コンテキストとシグナルハンドリングの設定
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	fmt.Println("[未実装] AWS連携・Sequel Ace起動は後続タスクで実装します")
+	// シグナルを受け取るチャンネル
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// 1. AWS Secrets Managerからパスワードを取得
+	fmt.Print("パスワードを取得中...")
+	password, err := aws.GetPassword(ctx, env.AWSProfile, env.AWSRegion, db.SecretName, db.SecretKey)
+	if err != nil {
+		fmt.Println(" 失敗")
+		return fmt.Errorf("パスワードの取得に失敗: %w", err)
+	}
+	fmt.Println(" 完了")
+
+	// 2. SSMポートフォワーディングを開始
+	fmt.Print("SSMポートフォワーディングを開始中...")
+	session, err := aws.StartPortForwarding(
+		ctx,
+		env.AWSProfile,
+		env.AWSRegion,
+		env.SSMTarget,
+		db.RDSHost,
+		db.Port,
+		db.LocalPort,
+	)
+	if err != nil {
+		fmt.Println(" 失敗")
+		return fmt.Errorf("SSMポートフォワーディングの開始に失敗: %w", err)
+	}
+	fmt.Println(" 完了")
+
+	// クリーンアップ用のdefer
+	defer func() {
+		fmt.Print("\nSSMセッションを終了中...")
+		if err := session.Stop(); err != nil {
+			fmt.Printf(" エラー: %v\n", err)
+		} else {
+			fmt.Println(" 完了")
+		}
+	}()
+
+	// 3. Sequel Aceを起動
+	fmt.Print("Sequel Aceを起動中...")
+	err = sequelace.Open(db.User, password, "127.0.0.1", db.LocalPort, db.Database)
+	if err != nil {
+		fmt.Println(" 失敗")
+		return fmt.Errorf("sequel Aceの起動に失敗: %w", err)
+	}
+	fmt.Println(" 完了")
+
+	fmt.Println()
+	fmt.Println("接続が確立されました。")
+	fmt.Println("終了するには Ctrl+C を押してください。")
+
+	// シグナルを待機
+	<-sigChan
+	fmt.Println("\n終了シグナルを受信しました。")
 
 	return nil
 }

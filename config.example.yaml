@@ -11,6 +11,7 @@ environments:
         database: app_a_production
         user: admin
         secret_name: prod/app-a/db-password
+        # secret_key: password  # JSON形式の場合のキー名（省略時は "password"）
       application_B:
         rds_host: prod-app-b.xxx.ap-northeast-1.rds.amazonaws.com
         port: 3306
@@ -31,6 +32,7 @@ environments:
         database: app_a_staging
         user: admin
         secret_name: staging/app-a/db-password
+        secret_key: DB_PASSWORD  # JSON形式シークレットで "DB_PASSWORD" キーを使用する例
       application_B:
         rds_host: staging-app-b.xxx.ap-northeast-1.rds.amazonaws.com
         port: 3306

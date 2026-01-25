@@ -17,6 +17,7 @@ type Database struct {
 	Database   string `mapstructure:"database"`
 	User       string `mapstructure:"user"`
 	SecretName string `mapstructure:"secret_name"`
+	SecretKey  string `mapstructure:"secret_key"` // JSON形式シークレットのキー名（省略時は "password"）
 }
 
 // Environment は環境ごとの設定（AWS情報 + 複数のDB）
