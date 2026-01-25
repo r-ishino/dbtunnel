@@ -3,10 +3,8 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -15,48 +13,31 @@ var (
 	// ErrCancelled は選択がキャンセルされた場合のエラー
 	ErrCancelled = errors.New("選択がキャンセルされました")
 
+	// スタイルを事前定義（パフォーマンス向上）
 	docStyle = lipgloss.NewStyle().Margin(1, 2)
-)
 
-// item はリスト項目を表す
-type item struct {
-	title string
-}
+	titleStyle = lipgloss.NewStyle().
+			MarginLeft(2).
+			Foreground(lipgloss.Color("170")).
+			Bold(true)
 
-func (i item) Title() string       { return i.title }
-func (i item) Description() string { return "" }
-func (i item) FilterValue() string { return i.title }
+	normalItemStyle = lipgloss.NewStyle().PaddingLeft(2)
 
-// itemDelegate はリスト項目の表示をカスタマイズする
-type itemDelegate struct{}
-
-func (d itemDelegate) Height() int                             { return 1 }
-func (d itemDelegate) Spacing() int                            { return 0 }
-func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
-func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
-	i, ok := listItem.(item)
-	if !ok {
-		return
-	}
-
-	str := fmt.Sprintf("%d. %s", index+1, i.title)
-
-	fn := lipgloss.NewStyle().PaddingLeft(2).Render
-	if index == m.Index() {
-		fn = func(s ...string) string {
-			return lipgloss.NewStyle().
+	selectedItemStyle = lipgloss.NewStyle().
 				PaddingLeft(2).
-				Foreground(lipgloss.Color("170")).
-				Render("> " + strings.Join(s, " "))
-		}
-	}
+				Foreground(lipgloss.Color("170"))
 
-	_, _ = fmt.Fprint(w, fn(str))
-}
+	helpStyle = lipgloss.NewStyle().
+			MarginTop(1).
+			MarginLeft(2).
+			Foreground(lipgloss.Color("241"))
+)
 
 // selectorModel はBubbleteaのモデル
 type selectorModel struct {
-	list     list.Model
+	title    string
+	options  []string
+	cursor   int
 	choice   string
 	quitting bool
 }
@@ -68,37 +49,59 @@ func (m selectorModel) Init() tea.Cmd {
 func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch keypress := msg.String(); keypress {
-		case "q", "ctrl+c":
+		switch msg.String() {
+		case "esc", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 
-		case "enter":
-			i, ok := m.list.SelectedItem().(item)
-			if ok {
-				m.choice = i.title
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
 			}
+
+		case "down", "j":
+			if m.cursor < len(m.options)-1 {
+				m.cursor++
+			}
+
+		case " ", "enter":
+			// SpaceまたはEnterで即確定
+			m.choice = m.options[m.cursor]
 			return m, tea.Quit
 		}
-
-	case tea.WindowSizeMsg:
-		h, v := docStyle.GetFrameSize()
-		m.list.SetSize(msg.Width-h, msg.Height-v)
 	}
 
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m selectorModel) View() string {
-	if m.choice != "" {
+	if m.choice != "" || m.quitting {
 		return ""
 	}
-	if m.quitting {
-		return ""
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(m.title))
+	b.WriteString("\n\n")
+
+	for i, option := range m.options {
+		cursor := "  "
+		if m.cursor == i {
+			cursor = "> "
+		}
+
+		line := fmt.Sprintf("%s%d. %s", cursor, i+1, option)
+
+		if m.cursor == i {
+			b.WriteString(selectedItemStyle.Render(line))
+		} else {
+			b.WriteString(normalItemStyle.Render(line))
+		}
+		b.WriteString("\n")
 	}
-	return docStyle.Render(m.list.View())
+
+	b.WriteString(helpStyle.Render("↑/↓: 移動  Space/Enter: 選択  Esc: キャンセル"))
+
+	return docStyle.Render(b.String())
 }
 
 // Select は選択肢を表示してユーザーの選択を返す
@@ -107,23 +110,11 @@ func Select(title string, options []string) (string, error) {
 		return "", errors.New("選択肢がありません")
 	}
 
-	items := make([]list.Item, len(options))
-	for i, name := range options {
-		items[i] = item{title: name}
+	m := selectorModel{
+		title:   title,
+		options: options,
+		cursor:  0,
 	}
-
-	l := list.New(items, itemDelegate{}, 0, 0)
-	l.Title = title
-	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(false)
-	l.SetShowHelp(false)
-	l.Styles.Title = lipgloss.NewStyle().
-		MarginLeft(2).
-		Foreground(lipgloss.Color("170")).
-		Bold(true)
-
-	m := selectorModel{list: l}
-	m.list.SetSize(40, len(options)+4)
 
 	p := tea.NewProgram(m)
 	finalModel, err := p.Run()
@@ -132,7 +123,7 @@ func Select(title string, options []string) (string, error) {
 	}
 
 	fm := finalModel.(selectorModel)
-	if fm.quitting && fm.choice == "" {
+	if fm.quitting {
 		return "", ErrCancelled
 	}
 
@@ -156,7 +147,7 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "esc", "ctrl+c":
 			m.quitting = true
 			m.selected = nil
 			return m, tea.Quit
@@ -190,7 +181,10 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
-			return m, tea.Quit
+			// 1件も選択されていない場合は無視
+			if len(m.selected) > 0 {
+				return m, tea.Quit
+			}
 		}
 	}
 
@@ -203,10 +197,6 @@ func (m multiSelectModel) View() string {
 	}
 
 	var b strings.Builder
-	titleStyle := lipgloss.NewStyle().
-		MarginLeft(2).
-		Foreground(lipgloss.Color("170")).
-		Bold(true)
 	b.WriteString(titleStyle.Render(m.title))
 	b.WriteString("\n\n")
 
@@ -221,21 +211,16 @@ func (m multiSelectModel) View() string {
 			checked = "[x]"
 		}
 
-		style := lipgloss.NewStyle().PaddingLeft(2)
-		if m.cursor == i {
-			style = style.Foreground(lipgloss.Color("170"))
-		}
-
 		line := fmt.Sprintf("%s%s %s", cursor, checked, option)
-		b.WriteString(style.Render(line))
+		if m.cursor == i {
+			b.WriteString(selectedItemStyle.Render(line))
+		} else {
+			b.WriteString(normalItemStyle.Render(line))
+		}
 		b.WriteString("\n")
 	}
 
-	helpStyle := lipgloss.NewStyle().
-		MarginTop(1).
-		MarginLeft(2).
-		Foreground(lipgloss.Color("241"))
-	b.WriteString(helpStyle.Render("x/スペース: 選択  a: 全選択  Enter: 確定  q: キャンセル"))
+	b.WriteString(helpStyle.Render("x/スペース: 選択  a: 全選択  Enter: 確定  Esc: キャンセル"))
 
 	return docStyle.Render(b.String())
 }
@@ -270,10 +255,6 @@ func SelectMultiple(title string, options []string) ([]string, error) {
 		if fm.selected[i] {
 			result = append(result, opt)
 		}
-	}
-
-	if len(result) == 0 {
-		return nil, errors.New("項目が選択されていません")
 	}
 
 	return result, nil
