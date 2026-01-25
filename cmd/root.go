@@ -25,8 +25,8 @@ Sequel Ace を起動して RDS に接続する CLI ツールです。
   dbtunnel list             # 環境一覧を表示`,
 	Args: cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// help, completion コマンドは設定ファイル不要
-		if cmd.Name() == "help" || cmd.Name() == "completion" {
+		// help, completion, config コマンドは設定ファイル不要
+		if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "config" {
 			return nil
 		}
 

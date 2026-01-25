@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // Database はアプリケーションごとのDB接続情報
@@ -23,15 +24,17 @@ type Database struct {
 
 // Environment は環境ごとの設定（AWS情報 + 複数のDB）
 type Environment struct {
-	AWSProfile string              `mapstructure:"aws_profile"`
-	AWSRegion  string              `mapstructure:"aws_region"`
-	SSMTarget  string              `mapstructure:"ssm_target"`
-	Databases  map[string]Database `mapstructure:"databases"`
+	AWSProfile    string              `mapstructure:"aws_profile"`
+	AWSRegion     string              `mapstructure:"aws_region"`
+	SSMTarget     string              `mapstructure:"ssm_target"`
+	Databases     map[string]Database `mapstructure:"databases"`
+	databaseOrder []string            // YAMLファイルでの定義順序
 }
 
 // Config はアプリケーション全体の設定
 type Config struct {
-	Environments map[string]Environment `mapstructure:"environments"`
+	Environments     map[string]Environment `mapstructure:"environments"`
+	environmentOrder []string               // YAMLファイルでの定義順序
 }
 
 // Load は設定ファイルを読み込む
@@ -56,7 +59,84 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	// YAMLファイルから順序情報を取得
+	if err := cfg.loadOrder(configPath); err != nil {
+		return nil, fmt.Errorf("failed to load order from config file: %w", err)
+	}
+
 	return &cfg, nil
+}
+
+// loadOrder はYAMLファイルから環境・データベースの定義順序を取得する
+func (c *Config) loadOrder(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return err
+	}
+
+	// ルートはDocumentNode、その中にMappingNodeがある
+	if root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return nil
+	}
+
+	rootMap := root.Content[0]
+	if rootMap.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	// environments を探す
+	for i := 0; i < len(rootMap.Content); i += 2 {
+		if rootMap.Content[i].Value == "environments" {
+			envsNode := rootMap.Content[i+1]
+			if envsNode.Kind != yaml.MappingNode {
+				continue
+			}
+
+			// 環境の順序を取得
+			for j := 0; j < len(envsNode.Content); j += 2 {
+				envName := envsNode.Content[j].Value
+				c.environmentOrder = append(c.environmentOrder, envName)
+
+				// 各環境内のdatabasesの順序を取得
+				envNode := envsNode.Content[j+1]
+				if envNode.Kind != yaml.MappingNode {
+					continue
+				}
+
+				dbOrder := extractDatabaseOrder(envNode)
+				if env, ok := c.Environments[envName]; ok {
+					env.databaseOrder = dbOrder
+					c.Environments[envName] = env
+				}
+			}
+			break
+		}
+	}
+
+	return nil
+}
+
+// extractDatabaseOrder は環境ノードからdatabasesの順序を取得する
+func extractDatabaseOrder(envNode *yaml.Node) []string {
+	var order []string
+	for i := 0; i < len(envNode.Content); i += 2 {
+		if envNode.Content[i].Value == "databases" {
+			dbsNode := envNode.Content[i+1]
+			if dbsNode.Kind != yaml.MappingNode {
+				continue
+			}
+			for j := 0; j < len(dbsNode.Content); j += 2 {
+				order = append(order, dbsNode.Content[j].Value)
+			}
+			break
+		}
+	}
+	return order
 }
 
 // GetEnvironment は指定された環境の設定を取得する
@@ -83,28 +163,38 @@ func (c *Config) GetDatabase(envName, dbName string) (*Environment, *Database, e
 	return env, &db, nil
 }
 
-// ListEnvironments は環境名の一覧を返す
+// ListEnvironments は環境名の一覧を返す（YAMLファイルの定義順）
 func (c *Config) ListEnvironments() []string {
+	// 順序情報がある場合はそれを使用
+	if len(c.environmentOrder) > 0 {
+		return c.environmentOrder
+	}
+
+	// フォールバック: mapから取得（順序不定）
 	names := make([]string, 0, len(c.Environments))
 	for name := range c.Environments {
 		names = append(names, name)
 	}
-	sort.Strings(names)
 	return names
 }
 
-// ListDatabases は指定された環境のデータベース名一覧を返す
+// ListDatabases は指定された環境のデータベース名一覧を返す（YAMLファイルの定義順）
 func (c *Config) ListDatabases(envName string) ([]string, error) {
 	env, err := c.GetEnvironment(envName)
 	if err != nil {
 		return nil, err
 	}
 
+	// 順序情報がある場合はそれを使用
+	if len(env.databaseOrder) > 0 {
+		return env.databaseOrder, nil
+	}
+
+	// フォールバック: mapから取得（順序不定）
 	names := make([]string, 0, len(env.Databases))
 	for name := range env.Databases {
 		names = append(names, name)
 	}
-	sort.Strings(names)
 	return names, nil
 }
 

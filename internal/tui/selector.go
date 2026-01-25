@@ -49,6 +49,12 @@ func (m selectorModel) Init() tea.Cmd {
 func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// スペースキーはKeyTypeで判定（IME問題対策）
+		if msg.Type == tea.KeySpace {
+			m.choice = m.options[m.cursor]
+			return m, tea.Quit
+		}
+
 		switch msg.String() {
 		case "esc", "ctrl+c":
 			m.quitting = true
@@ -64,10 +70,17 @@ func (m selectorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 
-		case " ", "enter":
-			// SpaceまたはEnterで即確定
+		case "　", "enter": // 全角スペースまたはEnterで確定
 			m.choice = m.options[m.cursor]
 			return m, tea.Quit
+
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			// 数字キーで直接選択（IME問題の代替手段）
+			idx := int(msg.String()[0] - '1')
+			if idx >= 0 && idx < len(m.options) {
+				m.choice = m.options[idx]
+				return m, tea.Quit
+			}
 		}
 	}
 
@@ -99,7 +112,7 @@ func (m selectorModel) View() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(helpStyle.Render("↑/↓: 移動  Space/Enter: 選択  Esc: キャンセル"))
+	b.WriteString(helpStyle.Render("↑/↓: 移動  Space/Enter/数字: 選択  Esc: キャンセル"))
 
 	return docStyle.Render(b.String())
 }
@@ -146,6 +159,16 @@ func (m multiSelectModel) Init() tea.Cmd {
 func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// スペースキーはKeyTypeで判定（IME問題対策）
+		if msg.Type == tea.KeySpace {
+			if m.selected[m.cursor] {
+				delete(m.selected, m.cursor)
+			} else {
+				m.selected[m.cursor] = true
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "esc", "ctrl+c":
 			m.quitting = true
@@ -162,8 +185,7 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 
-		case " ", "x", "tab":
-			// スペース/x/tabで選択をトグル
+		case "　", "x", "tab": // 全角スペース/x/tabで選択をトグル
 			if m.selected[m.cursor] {
 				delete(m.selected, m.cursor)
 			} else {
@@ -184,6 +206,17 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 1件も選択されていない場合は無視
 			if len(m.selected) > 0 {
 				return m, tea.Quit
+			}
+
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			// 数字キーで直接トグル（IME問題の代替手段）
+			idx := int(msg.String()[0] - '1')
+			if idx >= 0 && idx < len(m.options) {
+				if m.selected[idx] {
+					delete(m.selected, idx)
+				} else {
+					m.selected[idx] = true
+				}
 			}
 		}
 	}
@@ -211,7 +244,7 @@ func (m multiSelectModel) View() string {
 			checked = "[x]"
 		}
 
-		line := fmt.Sprintf("%s%s %s", cursor, checked, option)
+		line := fmt.Sprintf("%s%d. %s %s", cursor, i+1, checked, option)
 		if m.cursor == i {
 			b.WriteString(selectedItemStyle.Render(line))
 		} else {
@@ -220,7 +253,7 @@ func (m multiSelectModel) View() string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString(helpStyle.Render("x/スペース: 選択  a: 全選択  Enter: 確定  Esc: キャンセル"))
+	b.WriteString(helpStyle.Render("x/スペース/数字: 選択  a: 全選択  Enter: 確定  Esc: キャンセル"))
 
 	return docStyle.Render(b.String())
 }
