@@ -28,11 +28,12 @@ func GetSecret(ctx context.Context, profile, region, secretName string) (string,
 		SecretId: &secretName,
 	})
 	if err != nil {
-		return "", fmt.Errorf("シークレットの取得に失敗 (%s): %w", secretName, err)
+		// セキュリティ: エラーメッセージにシークレット名を含めない
+		return "", fmt.Errorf("シークレットの取得に失敗: %w", err)
 	}
 
 	if result.SecretString == nil {
-		return "", fmt.Errorf("シークレットが空です: %s", secretName)
+		return "", fmt.Errorf("シークレットが空です")
 	}
 
 	return *result.SecretString, nil
@@ -59,8 +60,8 @@ func GetPassword(ctx context.Context, profile, region, secretName, secretKey str
 		if password, ok := secretData[key]; ok {
 			return password, nil
 		}
-		// キーが見つからなければエラー
-		return "", fmt.Errorf("シークレットに '%s' キーが見つかりません: %s", key, secretName)
+		// セキュリティ: エラーメッセージにシークレット名を含めない
+		return "", fmt.Errorf("シークレットに '%s' キーが見つかりません", key)
 	}
 
 	// プレーンテキストの場合はそのまま返す
