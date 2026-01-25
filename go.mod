@@ -1,4 +1,4 @@
-module github.com/ishinoryuuichi/dbtunnel
+module github.com/r-ishino/dbtunnel
 
 go 1.25.6
 

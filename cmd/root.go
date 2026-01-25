@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ishinoryuuichi/dbtunnel/internal/config"
+	"github.com/r-ishino/dbtunnel/internal/config"
 	"github.com/spf13/cobra"
 )
 
