@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/ishinoryuuichi/dbtunnel/internal/config"
 	"github.com/ishinoryuuichi/dbtunnel/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -11,23 +12,30 @@ var connectCmd = &cobra.Command{
 	Use:   "connect [environment]",
 	Short: "指定した環境のDBに接続",
 	Long: `指定した環境のDBに接続します。
+環境を指定しない場合は、環境選択プロンプトが表示されます。
 環境を指定すると、その環境内のデータベースを選択するプロンプトが表示されます。`,
-	Args: cobra.ExactArgs(1),
-	RunE: runConnect,
+	Args: cobra.MaximumNArgs(1),
+	RunE: RunConnect,
 }
 
 func init() {
 	rootCmd.AddCommand(connectCmd)
 }
 
-func runConnect(_ *cobra.Command, args []string) error {
-	envName := args[0]
+// RunConnect は環境に接続するコマンドの実行関数
+func RunConnect(_ *cobra.Command, args []string) error {
 	cfg := GetConfig()
 	if cfg == nil {
 		return fmt.Errorf("設定が読み込まれていません")
 	}
 
-	// 環境の存在確認
+	// 環境名を取得（引数がなければ選択）
+	envName, err := selectEnvironment(cfg, args)
+	if err != nil {
+		return err
+	}
+
+	// 環境の設定を取得
 	env, err := cfg.GetEnvironment(envName)
 	if err != nil {
 		return err
@@ -72,6 +80,25 @@ func runConnect(_ *cobra.Command, args []string) error {
 	fmt.Println("[未実装] AWS連携・Sequel Ace起動は後続タスクで実装します")
 
 	return nil
+}
+
+// selectEnvironment は環境を選択する
+// 引数があれば解決、なければTUIで選択
+func selectEnvironment(cfg *config.Config, args []string) (string, error) {
+	if len(args) > 0 {
+		return cfg.ResolveEnvironment(args[0])
+	}
+
+	envNames := cfg.ListEnvironments()
+	if len(envNames) == 0 {
+		return "", fmt.Errorf("環境が設定されていません")
+	}
+	if len(envNames) == 1 {
+		fmt.Printf("環境: %s\n", envNames[0])
+		return envNames[0], nil
+	}
+
+	return tui.Select("接続する環境を選択してください", envNames)
 }
 
 // selectDatabase はデータベースを選択する

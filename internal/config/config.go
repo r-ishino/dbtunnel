@@ -105,3 +105,50 @@ func (c *Config) ListDatabases(envName string) ([]string, error) {
 	sort.Strings(names)
 	return names, nil
 }
+
+// 環境名のエイリアス定義
+var environmentAliases = map[string][]string{
+	"production":  {"prd", "prod", "p"},
+	"staging":     {"stg", "stag", "s"},
+	"development": {"dev", "d"},
+}
+
+// ResolveEnvironment は入力された文字列から環境名を解決する
+// 優先順位: 完全一致 → エイリアス → プレフィックスマッチング
+func (c *Config) ResolveEnvironment(input string) (string, error) {
+	// 完全一致をチェック
+	if _, ok := c.Environments[input]; ok {
+		return input, nil
+	}
+
+	// エイリアスマッチング
+	for envName, aliases := range environmentAliases {
+		if _, exists := c.Environments[envName]; !exists {
+			continue
+		}
+		for _, alias := range aliases {
+			if input == alias {
+				return envName, nil
+			}
+		}
+	}
+
+	// プレフィックスマッチング
+	var matches []string
+	for name := range c.Environments {
+		if len(input) <= len(name) && name[:len(input)] == input {
+			matches = append(matches, name)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		envList := c.ListEnvironments()
+		return "", fmt.Errorf("環境が見つかりません: %s (利用可能: %v)", input, envList)
+	case 1:
+		return matches[0], nil
+	default:
+		sort.Strings(matches)
+		return "", fmt.Errorf("'%s' に複数の環境がマッチします: %v", input, matches)
+	}
+}

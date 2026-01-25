@@ -14,7 +14,7 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "dbtunnel",
+	Use:   "dbtunnel [environment]",
 	Short: "DB接続を簡単にするCLIツール",
 	Long: `dbtunnel は AWS SSM 経由で踏み台サーバーにポートフォワーディングを確立し、
 Sequel Ace を起動して RDS に接続する CLI ツールです。
@@ -23,8 +23,9 @@ Sequel Ace を起動して RDS に接続する CLI ツールです。
   dbtunnel staging          # staging環境に接続（DB選択あり）
   dbtunnel production       # production環境に接続（DB選択あり）
   dbtunnel list             # 環境一覧を表示`,
+	Args: cobra.MaximumNArgs(1),
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// list コマンド以外のサブコマンドでも設定ファイルを読み込む
+		// help, completion コマンドは設定ファイル不要
 		if cmd.Name() == "help" || cmd.Name() == "completion" {
 			return nil
 		}
@@ -35,6 +36,11 @@ Sequel Ace を起動して RDS に接続する CLI ツールです。
 			return fmt.Errorf("設定ファイルの読み込みに失敗しました: %w", err)
 		}
 		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// 引数の有無に関わらず connect 処理を実行
+		// 引数がなければ環境選択TUIを表示
+		return RunConnect(cmd, args)
 	},
 }
 
