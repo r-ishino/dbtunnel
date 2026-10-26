@@ -70,25 +70,40 @@ func OpenMultipleInTabs(connections []ConnectionInfo) (*Process, error) {
 
 	// 全ウィンドウをタブに統合
 	if len(connections) > 1 {
-		script := `
+		script := fmt.Sprintf(`
 tell application "Sequel Ace"
 	activate
 end tell
 
 
 tell application "System Events"
+	-- openはURLを渡した時点で戻り、ウィンドウはその後に開くので、揃うまで待ってから結合する
+	set windowCount to 0
+	repeat 30 times
+		try
+			set windowCount to count of windows of process "Sequel Ace"
+		end try
+		if windowCount ≥ %d then exit repeat
+		delay 0.5
+	end repeat
+	if windowCount < %d then error "Sequel Aceのウィンドウが揃いませんでした（" & windowCount & "/%d）"
+
 	tell process "Sequel Ace"
 		tell menu bar 1
 			tell menu bar item "Window"
 				tell menu 1
-					-- メニュー項目18番目が「すべてのウィンドウを結合」
-					click menu item 18
+					-- 位置はOSのバージョンや接続中のディスプレイ数で変わるので名前で指定する。名前はOSの言語設定に従う
+					if exists menu item "すべてのウインドウを結合" then
+						click menu item "すべてのウインドウを結合"
+					else
+						click menu item "Merge All Windows"
+					end if
 				end tell
 			end tell
 		end tell
 	end tell
 end tell
-`
+`, len(connections), len(connections), len(connections))
 		cmd := exec.Command("osascript", "-e", script)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			fmt.Printf("タブ統合の警告: %v (%s)\n", err, string(output))
