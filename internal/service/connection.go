@@ -148,7 +148,7 @@ func (m *ConnectionManager) Cleanup() {
 	fmt.Println(" 完了")
 }
 
-// WaitForTermination はSequel Ace終了またはシグナルを待機する
+// WaitForTermination はSequel Ace終了・シグナル・SSMセッションの切断のいずれかを待機する
 func (m *ConnectionManager) WaitForTermination(proc *sequelace.Process) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -159,11 +159,21 @@ func (m *ConnectionManager) WaitForTermination(proc *sequelace.Process) {
 		close(sequelAceDone)
 	}()
 
+	disconnected := make(chan *Connection, len(m.connections))
+	for _, conn := range m.connections {
+		go func() {
+			<-conn.session.Done()
+			disconnected <- conn
+		}()
+	}
+
 	select {
 	case <-sequelAceDone:
 		fmt.Println("\nSequel Aceが終了しました。")
 	case <-sigChan:
 		fmt.Println("\n終了シグナルを受信しました。")
+	case conn := <-disconnected:
+		fmt.Printf("\n%s のSSMセッションが切断されました: %v\n", conn.DBName, conn.session.Err())
 	}
 }
 

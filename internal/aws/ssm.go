@@ -1,17 +1,23 @@
 package aws
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os/exec"
+	"strings"
 	"time"
 )
 
 // PortForwardingSession はSSMポートフォワーディングセッションを表す
 type PortForwardingSession struct {
-	cmd *exec.Cmd
+	cmd    *exec.Cmd
+	stderr *bytes.Buffer
+	done   chan struct{}
+	err    error
 }
 
 // StartPortForwarding はSSMポートフォワーディングを開始する
@@ -37,14 +43,23 @@ func StartPortForwarding(
 		"--region", region,
 	)
 
-	// 出力を破棄（バッファリングによるブロックを防ぐ）
+	session := &PortForwardingSession{
+		cmd:    cmd,
+		stderr: &bytes.Buffer{},
+		done:   make(chan struct{}),
+	}
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	cmd.Stderr = session.stderr
 
 	// コマンドを開始
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("SSMセッションの開始に失敗: %w", err)
 	}
+
+	go func() {
+		session.err = cmd.Wait()
+		close(session.done)
+	}()
 
 	// ポートが開くのを待機
 	addr := fmt.Sprintf("127.0.0.1:%d", localPort)
@@ -55,6 +70,8 @@ func StartPortForwarding(
 		case <-ctx.Done():
 			_ = cmd.Process.Kill()
 			return nil, ctx.Err()
+		case <-session.done:
+			return nil, fmt.Errorf("SSMセッションが予期せず終了しました: %w", session.Err())
 		default:
 		}
 
@@ -62,19 +79,15 @@ func StartPortForwarding(
 		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			return &PortForwardingSession{cmd: cmd}, nil
-		}
-
-		// プロセスが終了していないか確認
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			return nil, fmt.Errorf("SSMセッションが予期せず終了しました")
+			return session, nil
 		}
 
 		time.Sleep(500 * time.Millisecond)
 	}
 
 	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("SSMセッションの確立がタイムアウトしました（ポート %d が開きませんでした）", localPort)
+	<-session.done
+	return nil, fmt.Errorf("SSMセッションの確立がタイムアウトしました（ポート %d が開きませんでした）: %w", localPort, session.Err())
 }
 
 // Stop はポートフォワーディングセッションを停止する
@@ -85,10 +98,26 @@ func (s *PortForwardingSession) Stop() error {
 	return nil
 }
 
-// Wait はセッションの終了を待機する
-func (s *PortForwardingSession) Wait() error {
-	if s.cmd != nil {
-		return s.cmd.Wait()
+// Done はセッションのプロセスが終了すると閉じるチャネルを返す
+func (s *PortForwardingSession) Done() <-chan struct{} {
+	return s.done
+}
+
+// Err は終了したセッションのエラーを、aws CLIが標準エラーに出した内容を添えて返す。Doneが閉じる前はnilを返す
+func (s *PortForwardingSession) Err() error {
+	select {
+	case <-s.done:
+	default:
+		return nil
 	}
-	return nil
+
+	err := s.err
+	if err == nil {
+		err = errors.New("exit status 0")
+	}
+	output := strings.TrimSpace(s.stderr.String())
+	if output == "" {
+		return err
+	}
+	return fmt.Errorf("%w\n%s", err, output)
 }
