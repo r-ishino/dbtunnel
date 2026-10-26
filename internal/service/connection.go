@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/r-ishino/dbtunnel/internal/aws"
 	"github.com/r-ishino/dbtunnel/internal/config"
 	"github.com/r-ishino/dbtunnel/internal/sequelace"
+	"golang.org/x/sync/errgroup"
 )
 
 // Connection は単一のDB接続情報を保持する
@@ -66,41 +68,74 @@ func (m *ConnectionManager) BuildConnections(cfg *config.Config, envName string,
 	return nil
 }
 
-// EstablishConnections はすべての接続を確立する（パスワード取得、SSMポートフォワーディング）
+// EstablishConnections はすべての接続を並行で確立する（パスワード取得、SSMポートフォワーディング）
 func (m *ConnectionManager) EstablishConnections(ctx context.Context) error {
 	total := len(m.connections)
+	fmt.Printf("接続を確立中... (%d件を並行処理)\n", total)
 
-	for i, conn := range m.connections {
-		// パスワードを取得
-		fmt.Printf("[%d/%d] %s: パスワードを取得中...", i+1, total, conn.DBName)
-		password, err := aws.GetPassword(ctx, conn.Env.AWSProfile, conn.Env.AWSRegion, conn.DB.SecretName, conn.DB.SecretKey)
-		if err != nil {
-			fmt.Println(" 失敗")
-			return fmt.Errorf("%s のパスワード取得に失敗: %w", conn.DBName, err)
-		}
-		conn.password = password
-		fmt.Println(" 完了")
+	g, ctx := errgroup.WithContext(ctx)
+	var mu sync.Mutex // 標準出力の排他制御用
 
-		// SSMポートフォワーディングを開始
-		fmt.Printf("[%d/%d] %s: SSMポートフォワーディングを開始中...", i+1, total, conn.DBName)
-		session, err := aws.StartPortForwarding(
-			ctx,
-			conn.Env.AWSProfile,
-			conn.Env.AWSRegion,
-			conn.SSMTarget,
-			conn.DB.RDSHost,
-			conn.DB.Port,
-			conn.DB.LocalPort,
-		)
-		if err != nil {
-			fmt.Println(" 失敗")
-			return fmt.Errorf("%s のSSMポートフォワーディング開始に失敗: %w", conn.DBName, err)
-		}
-		conn.session = session
-		fmt.Println(" 完了")
+	for _, conn := range m.connections {
+		g.Go(func() error {
+			// パスワードを取得
+			password, err := aws.GetPassword(ctx, conn.Env.AWSProfile, conn.Env.AWSRegion, conn.DB.SecretName, conn.DB.SecretKey)
+			if err != nil {
+				mu.Lock()
+				fmt.Printf("  %s: パスワード取得失敗\n", conn.DBName)
+				mu.Unlock()
+				return fmt.Errorf("%s のパスワード取得に失敗: %w", conn.DBName, err)
+			}
+			conn.password = password
+
+			mu.Lock()
+			fmt.Printf("  %s: パスワード取得完了\n", conn.DBName)
+			mu.Unlock()
+
+			// SSMポートフォワーディングを開始
+			session, err := aws.StartPortForwarding(
+				ctx,
+				conn.Env.AWSProfile,
+				conn.Env.AWSRegion,
+				conn.SSMTarget,
+				conn.DB.RDSHost,
+				conn.DB.Port,
+				conn.DB.LocalPort,
+			)
+			if err != nil {
+				mu.Lock()
+				fmt.Printf("  %s: SSMポートフォワーディング失敗\n", conn.DBName)
+				mu.Unlock()
+				return fmt.Errorf("%s のSSMポートフォワーディング開始に失敗: %w", conn.DBName, err)
+			}
+			conn.session = session
+
+			mu.Lock()
+			fmt.Printf("  %s: SSMポートフォワーディング開始完了\n", conn.DBName)
+			mu.Unlock()
+
+			return nil
+		})
 	}
 
+	if err := g.Wait(); err != nil {
+		// エラー発生時は確立済みのセッションをクリーンアップ
+		m.cleanupEstablishedSessions()
+		return err
+	}
+
+	fmt.Println("すべての接続が確立されました")
 	return nil
+}
+
+// cleanupEstablishedSessions は確立済みのSSMセッションのみを終了する
+func (m *ConnectionManager) cleanupEstablishedSessions() {
+	for _, conn := range m.connections {
+		if conn.session != nil {
+			_ = conn.session.Stop()
+			conn.session = nil
+		}
+	}
 }
 
 // OpenSequelAce はSequel Aceを起動する
